@@ -1,0 +1,63 @@
+GConf-FS version 0.01
+===========================
+
+This script allows you to view a gconf tree as a file system.
+This script use the FUSE perl binding and Gnome2::GConf.
+
+References : 
+ FUSE : http://fuse.sourceforge.net
+ FUSE perl binding : http://search.cpan.org/~dpavlin/Fuse/
+
+
+INSTALLATION
+
+To install this script type the following:
+
+   perl Makefile.PL
+   make
+   make install
+
+
+DEPENDENCIES
+
+This module requires these other modules and libraries:
+
+  perl >= 5.8.0
+  Gnome2::GConf >= 1.043
+  Fuse >= 0.07 (Fuse perl binding)
+
+
+USAGE
+
+Load the fuse kernel module :
+# modprobe fuse
+
+Run as a user having read and write access to /dev/fuse :
+
+$ gconf-fs.pl /path/to/mount/point
+
+or 
+
+$ gconf-fs.pl gconf_source_description ... /path/to/mount/point
+
+Run gconf-f.pl without any parameters for more details.
+
+
+COPYRIGHT AND LICENSE
+
+Copyright (C) 2006 by Laurent Simonneau <l.simonneau@free.fr>
+
+This library is free software; you can redistribute it and/or
+modify it under the terms of the GNU Library General Public
+License as published by the Free Software Foundation; either
+version 2 of the License, or (at your option) any later version.
+
+This library is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+Library General Public License for more details.
+
+You should have received a copy of the GNU Library General Public
+License along with this library; if not, write to the 
+Free Software Foundation, Inc., 59 Temple Place - Suite 330, 
+Boston, MA  02111-1307  USA.
