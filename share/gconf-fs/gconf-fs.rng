@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="utf-8"?>
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+		 datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+
+    <choice>
+      <ref name="BaseTypeElement"/>
+      <ref name="ListElement"/>
+      <ref name="PairElement"/>
+      <ref name="SchemaElement"/>
+    </choice>
+
+  </start>
+
+  <!--  Simple types XML definition : int, bool, float, string
+  -->
+  <define name="BaseTypeElement">
+
+    <choice>
+      <element name="int">
+        <data type="int"/>
+      </element>
+
+      <element name="bool">
+        <choice>
+          <value>0</value>
+          <value>1</value>
+        </choice>
+      </element>
+
+      <element name="float">
+        <data type="float"/>
+      </element>
+
+      <element name="string">
+        <text/>
+      </element>
+
+    </choice>
+  </define>
+
+  <!--  List XML definition
+  -->
+  <define name="ListElement">
+
+    <element name="list">
+
+      <choice>
+
+        <!-- list of int -->
+        <group>
+          <attribute name="type">
+            <value>int</value>
+          </attribute>
+          
+          <zeroOrMore>
+            <element name="value">
+              <data type="int"/>         
+            </element>
+          </zeroOrMore>
+        </group>
+
+        <!-- list of bool -->
+        <group>
+          <attribute name="type">
+            <value>bool</value>
+          </attribute>       
+            
+          <zeroOrMore>
+            <element name="value">
+              <choice>
+                <value>0</value>
+                <value>1</value>
+              </choice>
+            </element>
+          </zeroOrMore>
+        </group>
+
+         <!-- list of float -->
+         <group>
+           <attribute name="type">
+             <value>float</value>
+           </attribute>
+            
+           <zeroOrMore>
+             <element name="value">
+               <data type="float"/>         
+             </element>
+           </zeroOrMore>
+         </group>
+
+        <!-- list of string -->
+         <group>
+           <attribute name="type">
+             <value>string</value>
+           </attribute>
+           
+           <zeroOrMore>
+             <element name="value">
+               <text/>
+             </element>
+           </zeroOrMore>
+         </group>
+      </choice>
+    </element>
+
+  </define>
+
+  <!--  Pair XML definition
+  -->
+  <define name="PairElement">
+
+    <element name="pair">
+      <element name="car">
+        <ref name="PairContent"/>
+      </element>
+
+      <element name="cdr">
+        <ref name="PairContent"/>
+      </element>
+
+    </element>
+
+  </define>
+
+
+
+  <!--  Pair Content XML definition
+  -->
+  <define name="PairContent">
+
+    <choice>
+      <!--  int -->
+      <group>
+        <attribute name="type">
+          <value>int</value>
+        </attribute>
+      
+        <data type="int"/>         
+      </group>
+
+      <!--  bool -->
+      <group>
+        <attribute name="type">
+          <value>bool</value>
+        </attribute>       
+            
+        <choice>
+          <value>0</value>
+          <value>1</value>
+        </choice>
+      </group>
+
+      <!--  float -->
+      <group>
+        <attribute name="type">
+          <value>float</value>
+        </attribute>
+            
+        <data type="float"/>         
+      </group>
+
+      <!-- string -->
+      <group>
+        <attribute name="type">
+          <value>string</value>
+        </attribute>
+           
+        <text/>
+      </group>
+    </choice>
+  </define>
+
+  <!--  Schema XML definition
+  -->
+  <define name="SchemaElement">
+    <element name="schema">
+      <interleave>
+        <element name="owner"><text/></element>
+        
+        <element name="short_desc"><text/></element>
+        <element name="locale"><text/></element>
+        <element name="type">
+          <choice>
+            <value>int</value>
+            <value>bool</value>
+            <value>string</value>
+            <value>float</value>
+            <value>pair</value>
+            <value>list</value>
+          </choice>
+        </element>
+        <element name="long_desc"><text/></element>
+
+        <element name="default_value">
+
+          <optional>
+            <choice>
+              <ref name="BaseTypeElement"/>
+              <ref name="ListElement"/>
+              <ref name="PairElement"/>
+            </choice>
+          </optional>
+
+        </element>
+      </interleave>
+    </element>
+  </define>
+  
+</grammar>

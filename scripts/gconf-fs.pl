@@ -1,25 +1,25 @@
 #!/usr/bin/perl -w
 
-#####################################################################
-#                                                                   #
-# Copyright (c) 2006 by Laurent Simonneau                           #
-#                                                                   #
-# This library is free software; you can redistribute it and/or     #
-# modify it under the terms of the GNU Library General Public       #
-# License as published by the Free Software Foundation; either      #
-# version 2 of the License, or (at your option) any later version.  #
-#                                                                   #
-# This library is distributed in the hope that it will be useful,   #
-# but WITHOUT ANY WARRANTY; without even the implied warranty of    #
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU #
-# Library General Public License for more details.                  #
-#                                                                   #
-# You should have received a copy of the GNU Library General Public #
-# License along with this library; if not, write to the             #
-# Free Software Foundation, Inc., 59 Temple Place - Suite 330,      #
-# Boston, MA  02111-1307  USA.                                      #
-#                                                                   #
-#####################################################################
+########################################################################
+#                                                                      #
+# Copyright (c) 2006 by Laurent Simonneau                              #
+#                                                                      #
+# This program is free software; you can redistribute it and/or modify #
+# it under the terms of the GNU General Public License as published by #
+# the Free Software Foundation; either version 2 of the License, or    #
+# (at your option) any later version.                                  #
+#                                                                      #
+# This program is distributed in the hope that it will be useful,      #
+# but WITHOUT ANY WARRANTY; without even the implied warranty of       #
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the        #
+# GNU General Public License for more details.                         #
+#                                                                      #
+# You should have received a copy of the GNU General Public License    #
+# along with this program; if not, write to the Free Software          #
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA        #
+# 02110-1301  USA                                                      #
+#                                                                      #
+########################################################################
 
 ##############################################################
 
@@ -55,15 +55,17 @@ use Fcntl ':mode';
 use Fuse;
 use POSIX qw(ENOENT EBADF EACCES EINVAL O_RDWR O_WRONLY);
 use Carp;
+use Encode;
 
-use Data::Dumper;
+use XML::LibXML;
 
 use Getopt::Long;
 use Gnome2::GConf;
 use Pod::Usage;
 use File::Basename;
 use File::Path;
-use IO::Scalar;
+use File::Spec;
+use IO::String;
 
 my %_OpenedFile = ();
 
@@ -108,11 +110,34 @@ $g_client->signal_connect(error => sub {
                         });
 
 
+# Create LibXML parser
+#
+my $xml_parser = new XML::LibXML();
+
+# Process RNG file path
+# Not really clean but I don't want a config file.
+#
+my $cur_path  = File::Spec->rel2abs($0);
+my $cur_dir   = dirname($cur_path);
+my $rng_file = $cur_dir . '/../share/gconf-fs/gconf-fs.rng';
+
+# Create Relax NG validator
+#
+my $rng_doc = eval { $xml_parser->parse_file($rng_file) };
+if($@)
+{
+    die "Can't parse XML file pouette : $rng_file" . XML::LibXML->get_last_error();
+}
+
+my $rng_validator = new XML::LibXML::RelaxNG(DOM => $rng_doc)
+    or die "Can't parse RelaxNG file pouette : $!";
+
+
 # Run FUSE
 #
 Fuse::main(
            # debug      => 1,
-           mountpoint => "/tmp/fuse",
+           mountpoint => $mount_dir,
 
            fsync      => \&gconf_fsync,    # done
 
@@ -140,8 +165,7 @@ Fuse::main(
            # chmod      => \&gconf_chmod,    # Not needed, rights can't be stored in gconf
            # chown      => \&gconf_chown,    # Not needed, owner can't be set in gconf
            # utime      => \&gconf_utime,    # Not needed, owner can't set dir ok key modification time gconf
-          )
-    or die $!;
+          );
 
 
 #-------------------------------------------------------------
@@ -196,23 +220,15 @@ sub gconf_getattr
     #
     else
     {
-        my ($key, $type) = _parse_filename($file);
-        if(! defined $key or
-           ! defined $type)
-        {
-            return - ENOENT();
-        }
-
-        my $val = _get_value($file);
+        my $val = get_value($file);
         return $val if ref($val) ne 'Gnome2::GConf::Value' && $val < 0;
 
         $mode |= S_IFREG;
-        $length = length($val->{value});
+        $length = do { use bytes; length($val->{value}) };
 
         # Lists, pairs and schama are read only
         #
-        if($file !~ /(\.(list)|(pair)|(schema))$/ &&
-           $g_client->key_is_writable($key))
+        if($g_client->key_is_writable($file))
         {
             $mode |= S_IWUSR;
         }
@@ -248,14 +264,7 @@ sub gconf_getdir
     @keys = grep { defined $_->{value}->{type} && $_->{key} !~ /_fake_key$/} @keys;
 
     @dirs = map { basename($_); } @dirs;
-    @keys = map
-              {
-                  my $name = basename($_->{key}) . '.' . $_->{value}->{type};
-                  $name .= ".list"
-                      if ref($_->{value}->{value}) eq 'ARRAY';
-                  $name;
-              }
-               @keys;
+    @keys = map { basename($_->{key}) } @keys;
 
     return ('.', @dirs, @keys, 0);
 }
@@ -334,27 +343,14 @@ sub gconf_rename
     return - EBADF() unless Gnome2::GConf->valid_key($old);
     return - EBADF() unless Gnome2::GConf->valid_key($new);
 
-    my ($old_key, $old_type) = _parse_filename($old);
-    if(! defined $old_key or
-       ! defined $old_type)
-    {
-        return - ENOENT();
-    }
-
-    my ($new_key, $new_type) = _parse_filename($new);
-    if(! defined $new_key or
-       ! defined $new_type)
-    {
-        return - ENOENT();
-    }
     # Check write access on both source and destination
     #
-    return - EACCES() unless $g_client->key_is_writable($old_key);
-    return - EACCES() unless $g_client->key_is_writable($new_key);
+    return - EACCES() unless $g_client->key_is_writable($old);
+    return - EACCES() unless $g_client->key_is_writable($new);
 
-    my $val = $g_client->get($old_key);
-    $g_client->set($new_key, $val);
-    $g_client->unset($old_key);
+    my $val = $g_client->get($old);
+    $g_client->set($new, $val);
+    $g_client->unset($old);
 
     return 0;
 }
@@ -375,18 +371,10 @@ sub gconf_unlink
 {
     my ($file) = @_;
 
-    return - EBADF() unless Gnome2::GConf->valid_key($file);
+    return - EBADF()  unless Gnome2::GConf->valid_key($file);
+    return - EACCES() unless $g_client->key_is_writable($file);
 
-    my ($key, $type) = _parse_filename($file);
-    if(! defined $key or
-       ! defined $type)
-    {
-        return - ENOENT();
-    }
-
-    return - EACCES() unless $g_client->key_is_writable($key);
-
-    $g_client->unset($key);
+    $g_client->unset($file);
 
     return 0;
 }
@@ -408,21 +396,11 @@ sub gconf_mknod
 {
     my ($file, $mode) = @_;
 
-    return - EBADF() unless Gnome2::GConf->valid_key($file);
+    return - EBADF()  unless Gnome2::GConf->valid_key($file);
+    return - EACCES() unless $g_client->key_is_writable($file);
 
-    my ($key, $type) = _parse_filename($file);
-    if(! defined $key or
-       ! defined $type)
-    {
-        return - ENOENT();
-    }
-
-    return - EACCES() unless $g_client->key_is_writable($key);
-
-    my %defval = (int => 0, string => '', float => 0, bool => 0);
-
-    my $value = { type => $type, value => $defval{$type} };
-    $g_client->set($key, $value);
+    my $value = { type => 'string', value => '' };
+    $g_client->set($file, $value);
 
     return 0;
 }
@@ -447,26 +425,12 @@ sub gconf_open
 
     return - EBADF() unless Gnome2::GConf->valid_key($file);
 
-    my ($key, $type) = _parse_filename($file);
-    if(! defined $key or
-       ! defined $type)
-    {
-        return - ENOENT();
-    }
-
-    my $val = _get_value($file);
+    my $val = get_value($file);
     return $val if ref($val) ne 'Gnome2::GConf::Value' && $val < 0;
 
-    # Disable write access on lists, pairs and schema.
-    # and check write access on key
+    # Check write access on key
     #
-    if( defined $mode &&
-        ( $mode & O_RDWR  || $mode & O_WRONLY) &&
-        ( 
-          $file =~ /\.((list)|(pair)|(schema))$/ ||
-          ! $g_client->key_is_writable($key)
-        )
-      )
+    if( ! $g_client->key_is_writable($file) )
     {
         return - EACCES;
     }
@@ -477,7 +441,7 @@ sub gconf_open
     {
         my $value = $val->{value};
 
-        $_OpenedFile{$file}->{fh}    = new IO::Scalar(\$value);
+        $_OpenedFile{$file}->{fh}    = new IO::String($value);
         $_OpenedFile{$file}->{nbref} = 1;
         $_OpenedFile{$file}->{flush} = 0;
     }
@@ -513,7 +477,7 @@ sub gconf_read
         return - EBADF();
     }
 
-    my $buf;
+    my $buf = "";
     my $retval = $_OpenedFile{$file}->{fh}->seek($offset, 0);
     return - int($!) unless $retval;
 
@@ -586,13 +550,11 @@ sub gconf_truncate
         return - EBADF();
     }
 
-    my $sref = $_OpenedFile{$file}->{fh}->sref;
-    substr($$sref, $offset) = "";
+    $_OpenedFile{$file}->{fh}->truncate($offset);
 
     $_OpenedFile{$file}->{flush} = 1;
 
     $retval = gconf_release($file);
-
     return $retval;
 }
 
@@ -658,6 +620,8 @@ sub gconf_flush
 {
     my ($file) = @_;
 
+    # Check file name validity and access right.
+    #
     return - EBADF() unless Gnome2::GConf->valid_key($file);
 
     if(!exists $_OpenedFile{$file})
@@ -666,29 +630,55 @@ sub gconf_flush
     }
 
     return 0 if ($_OpenedFile{$file}->{flush} == 0);
+    return - EACCES() unless $g_client->key_is_writable($file);
 
-    my ($key, $type) = _parse_filename($file);
-    if(! defined $key or
-       ! defined $type)
-    {
-        return - ENOENT();
-    }
-
-    return - EACCES() unless $g_client->key_is_writable($key);
-
+    # Does nothing if the file is empty (caused by a truncate).
+    #
     my $data = $_OpenedFile{$file}->{fh}->sref;
-
-    if($type =~ /^int|float|bool$/)
+    if($$data eq '')
     {
-        chomp($$data);
-        $$data = 0 if $$data eq '';
+        $_OpenedFile{$file}->{flush} = 0;
+        return 0;
     }
 
-    my $value = { type  => $type,
-                  value => $$data,
-                };
+    # Parse XML String
+    #
+    my $doc = eval { $xml_parser->parse_string($$data); };
+    if($@)
+    {
+        warn "Error while parsing content of key $file : " . XML::LibXML->get_last_error();
 
-    $g_client->set($key, $value);
+        $_OpenedFile{$file}->{flush} = 0;
+        return - EINVAL();
+    }
+
+    # Validate Document with RelaxNG
+    #
+    eval { $rng_validator->validate($doc); };
+    if($@ ne "")
+    {
+        warn "Error while validation XML document : $@";
+
+        $_OpenedFile{$file}->{flush} = 0;
+        return - EINVAL();
+    }
+
+    # Convert XML document to a Gnome2::GConf::Value object
+    # No error check, the XML is valid (validated with RNG)
+    #
+    my $root = $doc->documentElement;
+    my $value = xml_to_value($root);
+
+    # Store it into GConf
+    #
+    if($value->{type} ne 'schema')
+    {
+        $g_client->set($file, $value);
+    }
+    else
+    {
+        $g_client->set_schema($file, $value->{value});
+    }
 
     $_OpenedFile{$file}->{flush} = 0;
 
@@ -697,59 +687,33 @@ sub gconf_flush
 
 #-------------------------------------------------------------
 #
-# _get_value (file)
+# get_value (file)
 #
 # Return a hash ref describing value of the given key.
 # The hash look like :
 # {
 #   type       : string|int|float|bool|pair|schema
 #   value      : a printable representation of the value
-#   list_value : Array ref containig values of keys with list type
 #   car, cdr   : 'pair' values.
+#   schema     : schema description
 # }
 #
 #-------------------------------------------------------------
 
-sub _get_value
+sub get_value
 {
     my ($file) = @_;
 
-    my ($key, $type) = _parse_filename($file);
-
-    if(! defined $key or
-       ! defined $type)
-    {
-        return - ENOENT();
-    }
-
-    my $val = $g_client->get($key);
+    my $val = $g_client->get($file);
     if(! defined $val)
     {
         return - ENOENT();
     }
 
-    # For special types (pair, list and schema)
-    # Convert value into a printable string.
+    # Convert value into an XML string
     #
-    # These "files" are read only.
-    #
-    if($val->{type} eq 'pair')
-    {
-        $val->{value} =
-            "car:$val->{car}->{type}:$val->{car}->{value}\n" .
-            "cdr:$val->{cdr}->{type}:$val->{cdr}->{value}";
-    }
-    elsif($val->{type} eq 'schema')
-    {
-        $val->{schema_value} = $val->{value};
-        $val->{value} = Dumper($val->{schema_value});
-    }
-    elsif(ref($val->{value}) eq 'ARRAY')
-    {
-        $val->{list_value} = $val->{value};
-        $val->{value} = '[' . join(',', @{$val->{value}}) . ']';
-    }
-
+    my $xml_element = value_to_xml($val);
+    $val->{value} = $xml_element->toString(1);
 
     return $val;
 }
@@ -757,52 +721,285 @@ sub _get_value
 
 #-------------------------------------------------------------
 #
-# _parse_filename (file)
+# value_to_xml (val)
 #
-# Parse filenames.
-#
-# Returns a array ref like [ 'key name', 'type' ]
+# Convert Gnome2::GConf::Value to XML description.
 #
 #-------------------------------------------------------------
 
-sub _parse_filename
+sub value_to_xml
 {
-    my ($file) = @_;
+    my ($val) = @_;
 
-    return ($file =~ /^(.*?)\.([^\.]*)(\.list)?$/);
+    if($val->{type} eq 'pair')
+    {
+        return pair_to_xml($val);
+    }
+    elsif($val->{type} eq 'schema')
+    {
+        return schema_to_xml($val);
+    }
+    elsif(ref($val->{value}) eq 'ARRAY')
+    {
+        return list_to_xml($val);
+    }
+    else
+    {
+        my $element = new XML::LibXML::Element($val->{type});
+        $element->appendText($val->{value});
+        return $element;
+    }
+
 }
 
 #-------------------------------------------------------------
 #
-# _check_data_value (type, data)
+# pair_to_xml (val)
 #
-# Check if the given data match the given type.
-#
-# Returns a correct data or croak on error.
+# Convert a pair to a XML description.
 #
 #-------------------------------------------------------------
 
-sub _check_data_value
+sub pair_to_xml
 {
-    my ($type, $data) = @_;
+    my ($val) = @_;
+    my $element = new XML::LibXML::Element('pair');
 
-    if($type eq 'int' or $type eq 'float')
+    foreach my $name qw(car cdr)
     {
-        croak "Not a numerical value" if $data !~ /^[-.]?[0-9]/;
+        my $node = new XML::LibXML::Element($name);
+        $node->appendText($val->{$name}->{value});
+        $node->setAttribute('type', $val->{$name}->{type});
 
-        chomp($data);
+        $element->appendChild($node);
     }
-    elsif($type eq 'bool')
+
+    return $element;
+}
+
+#-------------------------------------------------------------
+#
+# list_to_xml (val)
+#
+# Convert a list to a XML description.
+#
+#-------------------------------------------------------------
+
+sub list_to_xml
+{
+    my ($val) = @_;
+
+    my $element = new XML::LibXML::Element('list');
+    $element->setAttribute('type', $val->{type});
+
+    foreach my $val (@{$val->{value}})
     {
-        chomp($data);
-        croak "Not a numerical value" if $data ne '1' and $data ne '0';
+        $element->appendTextChild('value', $val);
+    }
+
+    return $element;
+}
+
+
+#-------------------------------------------------------------
+#
+# schema_to_xml (val)
+#
+# Convert a schema to a XML description.
+#
+#-------------------------------------------------------------
+
+sub schema_to_xml
+{
+    my ($val) = @_;
+    my $element = new XML::LibXML::Element('schema');
+
+    foreach my $key qw(owner short_desc locale type long_desc)
+    {
+        my $val = $val->{value}->{$key};
+        $val = '' unless defined $val;
+
+        $element->appendTextChild($key, $val);
+    }
+
+    my $node = new XML::LibXML::Element('default_value');
+    if(defined $val->{value}->{default_value})
+    {
+        my $def_val = value_to_xml($val->{value}->{default_value});
+        $node->appendChild($def_val);
+    }
+    $element->appendChild($node);
+
+    return $element;
+}
+
+
+#-------------------------------------------------------------
+#
+# xml_to_value (element)
+#
+# Convert a XML description to a Gnome2::GConf::Value
+#
+#-------------------------------------------------------------
+
+sub xml_to_value
+{
+    my ($element) = @_;
+
+    my $type = $element->nodeName;
+
+    if($type eq 'pair')
+    {
+        return pair_xml_to_value($element);
+    }
+    elsif($type eq 'schema')
+    {
+        return schema_xml_to_value($element);
+    }
+    elsif($type eq 'list')
+    {
+        return list_xml_to_value($element);
     }
     else
     {
-        chomp($data);
+        my $value = { type => $type };
+        $value->{value} = base_type_xml_to_value($element);
+        return $value;
     }
 
+}
+
+
+#-------------------------------------------------------------
+#
+# pair_xml_to_value (element)
+#
+# Convert a pair XML description to a Gnome2::GConf::Value.
+#
+#-------------------------------------------------------------
+
+sub pair_xml_to_value
+{
+    my ($element) = @_;
+
+    my $value = { type => 'pair' };
+
+    my $car = $element->getElementsByTagName('car')->item(0);
+    my $cdr = $element->getElementsByTagName('cdr')->item(0);
+
+    $value->{car}->{type}  = $car->getAttribute('type');
+    $value->{cdr}->{type}  = $cdr->getAttribute('type');
+    $value->{car}->{value} = base_type_xml_to_value($car);
+    $value->{cdr}->{value} = base_type_xml_to_value($cdr);
+
+    return $value;
+}
+
+#-------------------------------------------------------------
+#
+# list_xml_to_value (element)
+#
+# Convert a list XML description to a Gnome2::GConf::Value.
+#
+#-------------------------------------------------------------
+
+sub list_xml_to_value
+{
+    my ($element) = @_;
+
+    my $value = {
+                 type  => $element->getAttribute('type'),
+                 value => []
+                };
+
+    my @data_list = $element->getElementsByTagName('value');
+
+    foreach my $val (@data_list)
+    {
+        push @{$value->{value}}, base_type_xml_to_value($val);
+    }
+
+    return $value;
+}
+
+
+#-------------------------------------------------------------
+#
+# schema_xml_to_value (val)
+#
+# Convert a schema XML description to a Gnome2::GConf::Value
+#
+#-------------------------------------------------------------
+
+sub schema_xml_to_value
+{
+    my ($element) = @_;
+
+    my $value = { type => 'schema' };
+
+    foreach my $key qw(owner short_desc locale type long_desc)
+    {
+        my $node = $element->getElementsByTagName($key)->item(0);
+        next unless defined $node;
+
+        $value->{value}->{$key} = get_node_value($node);
+    }
+
+    my $node = $element->getElementsByTagName('default_value')->item(0);
+    $node = $node->firstChild;
+    while(defined $node && $node->nodeType == 3)
+    {
+        $node = $node->nextSibling;
+    }
+
+    if(defined $node)
+    {
+        $value->{value}->{default_value} = xml_to_value($node);
+    }
+
+    return $value;
+}
+
+#-------------------------------------------------------------
+#
+# base_type_xml_to_value (val)
+#
+# Convert a base type value to a XML description.
+#
+#-------------------------------------------------------------
+
+sub base_type_xml_to_value
+{
+    my ($element) = @_;
+
+    my $data = get_node_value($element);
+
+    chomp($data);
+
+    $data =~ s/^ *//;
+    $data =~ s/ *$//;
+
     return $data;
+}
+
+#-------------------------------------------------------------
+#
+# get_node_value (node)
+#
+# Return the text content of an XML node.
+#
+#------------------------------------------------------------
+
+sub get_node_value
+{
+    my ($node) = @_;
+
+    if(defined $node->firstChild)
+    {
+        return decode('utf-8', $node->firstChild->textContent);
+    }
+
+    return "";
 }
 
 1;

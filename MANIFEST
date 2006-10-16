@@ -1,6 +1,8 @@
+AUTHORS
+ChangeLog
+COPYING
+Makefile.PL
+MANIFEST
 README
 scripts/gconf-fs.pl
-Makefile.PL
-COPYING
-AUTHOR
-MANIFEST
+share/gconf-fs/gconf-fs.rng

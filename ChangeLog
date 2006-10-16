@@ -1,0 +1,17 @@
+2006-10-16  Laurent Simonneau <l.simonneau@free.fr>
+
+	* scripts/gconf-fs.pl:
+        * README: Change License to GPL
+
+	* README:
+	* Makefile.PL: Update version to 0.02.
+	               Correct and complete dependances.
+
+	* scripts/gconf-fs.pl: Major enhancements.
+		- Remove file extension.
+		- File content is now XML data.
+		- In gconf_flush, use RelaxNG validation to check file
+		  content.
+		- Use IO::String instead of IO::Scalar.
+		- schema, list and pair are now writeable.
+
